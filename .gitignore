@@ -27,4 +27,9 @@ results/*
 *.tar.gz
 *.tar
 *.zip
+*.png
+*.jpg
+*.pth
+*.log
+*.pkl
 myprog*

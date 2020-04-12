@@ -182,9 +182,9 @@ class ResNet(nn.Module):
 
     def get_1x_lr_params_NOscale(self):
         """
-        This generator returns all the parameters of the net except for 
-        the last classification layer. Note that for each batchnorm layer, 
-        requires_grad is set to False in deeplab_resnet.py, therefore this function does not return 
+        This generator returns all the parameters of the net except for
+        the last classification layer. Note that for each batchnorm layer,
+        requires_grad is set to False in deeplab_resnet.py, therefore this function does not return
         any batchnorm parameter
         """
         b = []
@@ -196,7 +196,7 @@ class ResNet(nn.Module):
         b.append(self.layer3)
         b.append(self.layer4)
 
-    
+
         for i in range(len(b)):
             for j in b[i].modules():
                 jj = 0
@@ -216,15 +216,15 @@ class ResNet(nn.Module):
         for j in range(len(b)):
             for i in b[j]:
                 yield i
-            
+
 
 
     def optim_parameters(self, args):
         return [{'params': self.get_1x_lr_params_NOscale(), 'lr': args.learning_rate},
-                {'params': self.get_10x_lr_params(), 'lr': 10*args.learning_rate}] 
+                {'params': self.get_10x_lr_params(), 'lr': 10*args.learning_rate}]
 
 
 def Res_Deeplab(num_classes=21):
+    #model = ResNet(Bottleneck,[3, 4, 6, 3], num_classes)
     model = ResNet(Bottleneck,[3, 4, 23, 3], num_classes)
     return model
-
