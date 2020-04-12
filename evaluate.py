@@ -17,11 +17,18 @@ from torch.utils import data, model_zoo
 from model.deeplabv2 import Res_Deeplab
 #from model.deeplabv3p import Res_Deeplab
 from data.voc_dataset import VOCDataSet
+from data.isic_dataset import ISICDataSet
+from data.cmr_dataset import CMRvalDataSet
+from data.cmr_dataset import CMRDataSet
+from data.cmr_dataset import CMRtestDataSet
 from data import get_data_path, get_loader
 import torchvision.transforms as transform
+from crf import dense_crf,crf_inference
 
 from PIL import Image
 import scipy.misc
+
+save_path = '/mnt/lustre/lichuchen/lily/few-shot/semisup-semseg/script_sunny/vis/fully/32'
 
 
 IMG_MEAN = np.array((104.00698793,116.66876762,122.67891434), dtype=np.float32)
@@ -29,8 +36,8 @@ IMG_MEAN = np.array((104.00698793,116.66876762,122.67891434), dtype=np.float32)
 DATASET = 'pascal_voc' # pascal_context
 
 MODEL = 'deeplabv2' # deeeplabv2, deeplabv3p
-DATA_DIRECTORY = './data/voc_dataset/'
-DATA_LIST_PATH = './data/voc_list/val.txt'
+DATA_DIRECTORY = '/mnt/lustre/lichuchen/lily/few-shot/semisup-semseg/data/voc_dataset/'
+DATA_LIST_PATH = '/mnt/lustre/lichuchen/lily/few-shot/semisup-semseg/data/voc_list/val.txt'
 IGNORE_LABEL = 255
 NUM_CLASSES = 21 # 60 for pascal context
 RESTORE_FROM = ''
@@ -40,7 +47,7 @@ SAVE_DIRECTORY = 'results'
 
 def get_arguments():
     """Parse all the arguments provided from the CLI.
-    
+
     Returns:
       A list of parsed arguments.
     """
@@ -67,6 +74,8 @@ def get_arguments():
                         help="combine with Multi-Label Mean Teacher branch")
     parser.add_argument("--save-output-images", action="store_true",
                         help="save output images")
+    parser.add_argument("--crf", action="store_true",
+                        help="use crf as post processing.")
     return parser.parse_args()
 
 
@@ -125,20 +134,21 @@ def get_label_vector(target, nclass):
     return vect_out
 
 def get_iou(args, data_list, class_num, save_path=None):
-    from multiprocessing import Pool 
+    from multiprocessing import Pool
     from utils.metric import ConfusionMatrix
 
     ConfM = ConfusionMatrix(class_num)
     f = ConfM.generateM
-    pool = Pool() 
+    pool = Pool()
     m_list = pool.map(f, data_list)
-    pool.close() 
-    pool.join() 
-    
+    pool.close()
+    pool.join()
+
     for m in m_list:
         ConfM.addM(m)
 
     aveJ, j_list, M = ConfM.jaccard()
+    aved, d_list, M = ConfM.dice()
 
     if args.dataset == 'pascal_voc':
         classes = np.array(('background',  # always index 0
@@ -147,6 +157,18 @@ def get_iou(args, data_list, class_num, save_path=None):
             'cow', 'diningtable', 'dog', 'horse',
             'motorbike', 'person', 'pottedplant',
             'sheep', 'sofa', 'train', 'tvmonitor'))
+    elif args.dataset == 'ISIC':
+        classes = np.array(('background',  # always index 0
+            'lesion'))
+    elif args.dataset == 'CMR':
+        classes = np.array(('background',  # always index 0
+            'left_ventricle'))
+    elif args.dataset == 'CMR2':
+        classes = np.array(('background',  # always index 0
+            'left_ventricle'))
+    elif args.dataset == 'RV':
+        classes = np.array(('background',  # always index 0
+            'right_ventricle'))
     elif args.dataset == 'pascal_context':
         classes = np.array(('background', 'aeroplane', 'bicycle', 'bird', 'boat', 'bottle', 'bus', 'car', 'cat', 'chair', 'cow', 'table', 'dog', 'horse', 'motorbike', 'person',
                 'pottedplant', 'sheep', 'sofa', 'train', 'tvmonitor', 'bag', 'bed', 'bench', 'book', 'building', 'cabinet' , 'ceiling', 'cloth', 'computer', 'cup',
@@ -158,12 +180,15 @@ def get_iou(args, data_list, class_num, save_path=None):
             "traffic_light", "traffic_sign", "vegetation",
             "terrain", "sky", "person", "rider",
             "car", "truck", "bus",
-            "train", "motorcycle", "bicycle")) 
+            "train", "motorcycle", "bicycle"))
 
     for i, iou in enumerate(j_list):
         print('class {:2d} {:12} IU {:.2f}'.format(i, classes[i], j_list[i]))
-    
+    for i, iou in enumerate(d_list):
+        print('class {:2d} {:12} IU {:.2f}'.format(i, classes[i], d_list[i]))
+
     print('meanIOU: ' + str(aveJ) + '\n')
+    print('meandice: ' + str(aved) + '\n')
     if save_path:
         with open(save_path, 'w') as f:
             for i, iou in enumerate(j_list):
@@ -192,9 +217,26 @@ def main():
     model.cuda(gpu0)
 
     if args.dataset == 'pascal_voc':
-        testloader = data.DataLoader(VOCDataSet(args.data_dir, args.data_list, crop_size=(505, 505), mean=IMG_MEAN, scale=False, mirror=False), 
+        testloader = data.DataLoader(VOCDataSet(args.data_dir, args.data_list, crop_size=(505, 505), mean=IMG_MEAN, scale=False, mirror=False),
                                     batch_size=1, shuffle=False, pin_memory=True)
         interp = nn.Upsample(size=(505, 505), mode='bilinear', align_corners=True)
+
+    elif args.dataset == 'ISIC':
+        testloader = data.DataLoader(ISICDataSet(args.data_dir, args.data_list, crop_size=(800, 800), mean=IMG_MEAN, scale=False, mirror=False),
+                                    batch_size=1, shuffle=False, pin_memory=True)
+        interp = nn.Upsample(size=(800, 800), mode='bilinear', align_corners=True)
+    elif args.dataset == 'CMR':
+        testloader = data.DataLoader(CMRvalDataSet(args.data_dir, args.data_list, crop_size=(128, 128), mean=IMG_MEAN, scale=False, mirror=False),
+                                    batch_size=1, shuffle=False, pin_memory=True)
+        interp = nn.Upsample(size=(128, 128), mode='bilinear', align_corners=True)
+    elif args.dataset == 'CMR2':
+        testloader = data.DataLoader(CMRtestDataSet(args.data_dir, args.data_list, crop_size=(128, 128), mean=IMG_MEAN, scale=False, mirror=False),
+                                    batch_size=1, shuffle=False, pin_memory=True)
+        interp = nn.Upsample(size=(128, 128), mode='bilinear', align_corners=True)
+    elif args.dataset == 'RV':
+        testloader = data.DataLoader(CMRDataSet(args.data_dir, args.data_list, crop_size=(216, 216), mean=IMG_MEAN, scale=False, mirror=False),
+                                    batch_size=1, shuffle=False, pin_memory=True)
+        interp = nn.Upsample(size=(216, 216), mode='bilinear', align_corners=True)
 
     elif args.dataset == 'pascal_context':
         input_transform = transform.Compose([transform.ToTensor(),
@@ -212,16 +254,22 @@ def main():
         test_dataset = data_loader( data_path, img_size=(512, 1024), is_transform=True, split='val')
         testloader = data.DataLoader(test_dataset, batch_size=1, shuffle=False, pin_memory=True)
         interp = nn.Upsample(size=(512, 1024), mode='bilinear', align_corners=True)
-    
+
     data_list = []
     colorize = VOCColorize()
-   
-    if args.with_mlmt:
-        mlmt_preds = np.loadtxt('mlmt_output/output_ema_p_1_0_voc_5.txt', dtype = float) # best mt 0.05
 
-        mlmt_preds[mlmt_preds>=0.2] = 1
-        mlmt_preds[mlmt_preds<0.2] = 0 
- 
+    if args.with_mlmt:
+        if args.dataset == 'pascal_voc':
+            mlmt_preds = np.loadtxt('mlmt_output/output_ema_p_1_0_voc_5.txt', dtype = float) # best mt 0.05
+
+            mlmt_preds[mlmt_preds>=0.2] = 1
+            mlmt_preds[mlmt_preds<0.2] = 0
+        elif args.dataset == 'ISIC':
+            mlmt_preds = np.loadtxt('mlmt_output/output_ema_p_1_0_voc_5.txt', dtype = float) # best mt 0.05
+
+            mlmt_preds[mlmt_preds>=0.2] = 1
+            mlmt_preds[mlmt_preds<0.2] = 0
+
     for index, batch in enumerate(testloader):
         if index % 100 == 0:
             print('%d processd'%(index))
@@ -230,9 +278,18 @@ def main():
         output  = model(Variable(image, volatile=True).cuda(gpu0))
         output = interp(output).cpu().data[0].numpy()
 
+
         if args.dataset == 'pascal_voc':
             output = output[:,:size[0],:size[1]]
             gt = np.asarray(label[0].numpy()[:size[0],:size[1]], dtype=np.int)
+        elif args.dataset == 'ISIC':
+            gt = np.asarray(label[0].numpy(), dtype=np.int)
+        elif args.dataset == 'CMR':
+            gt = np.asarray(label[0].numpy(), dtype=np.int)
+        elif args.dataset == 'CMR2':
+            gt = np.asarray(label[0].numpy(), dtype=np.int)
+        elif args.dataset == 'RV':
+            gt = np.asarray(label[0].numpy(), dtype=np.int)
         elif args.dataset == 'pascal_context':
             gt = np.asarray(label[0].numpy(), dtype=np.int)
         elif args.dataset == 'cityscapes':
@@ -241,10 +298,26 @@ def main():
         if args.with_mlmt:
             for i in range(args.num_classes):
                 output[i]= output[i]*mlmt_preds[index][i]
-        
+
+        #output = output.transpose(1,2,0)
+        if args.crf:
+            img_8 = image[0].numpy().transpose((1,2,0))
+            img_8 = np.ascontiguousarray(img_8)
+            # mean = (0.485, 0.456, 0.406)
+            # std = (0.229, 0.224, 0.225)
+            # img_8[:,:,0] = (img_8[:,:,0]*std[0] + mean[0])*255
+            # img_8[:,:,1] = (img_8[:,:,1]*std[1] + mean[1])*255
+            # img_8[:,:,2] = (img_8[:,:,2]*std[2] + mean[2])*255
+            # img_8[img_8 > 255] = 255
+            # img_8[img_8 < 0] = 0
+            img_8 = img_8.astype(np.uint8)
+            #output = dense_crf(output, img_8, n_classes=2, n_iters=1)
+            output = crf_inference(img_8, output, t=1,labels=2)
         output = output.transpose(1,2,0)
         output = np.asarray(np.argmax(output, axis=2), dtype=np.int)
-       
+
+        #cv2.imwrite(os.path.join(save_path,name[0]+'.png'),output*60)
+
         if args.save_output_images:
             if args.dataset == 'pascal_voc':
                 filename = os.path.join(args.save_dir, '{}.png'.format(name[0]))
@@ -253,9 +326,15 @@ def main():
             elif args.dataset == 'pascal_context':
                 filename = os.path.join(args.save_dir, filename[0])
                 scipy.misc.imsave(filename, gt)
-        
+            elif args.dataset == 'ISIC':
+                filename = os.path.join(args.save_dir, filename[0])
+                scipy.misc.imsave(filename, gt)
+            elif args.dataset == 'CMR':
+                filename = os.path.join(args.save_dir, filename[0])
+                scipy.misc.imsave(filename, gt)
+
         data_list.append([gt.flatten(), output.flatten()])
-    
+
     filename = os.path.join(args.save_dir, 'result.txt')
     get_iou(args, data_list, args.num_classes, filename)
 

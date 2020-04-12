@@ -22,6 +22,7 @@ from model.deeplabv2 import Res_Deeplab
 
 from utils.loss import CrossEntropy2d
 from data.voc_dataset import VOCDataSet, VOCGTDataSet
+from data.cmr_dataset import CMRDataSet
 from data import get_loader, get_data_path
 from data.augmentations import *
 
@@ -30,9 +31,9 @@ start = timeit.default_timer()
 IMG_MEAN = np.array((104.00698793,116.66876762,122.67891434), dtype=np.float32)
 
 # dataset params
-NUM_CLASSES = 21 # 21 for PASCAL-VOC / 60 for PASCAL-Context 
+NUM_CLASSES = 21 # 21 for PASCAL-VOC / 60 for PASCAL-Context
 
-DATASET = 'pascal_voc' #pascal_voc or pascal_context 
+DATASET = 'pascal_voc' #pascal_voc or pascal_context
 
 DATA_DIRECTORY = './data/voc_dataset/'
 DATA_LIST_PATH = './data/voc_list/train_aug.txt'
@@ -53,10 +54,11 @@ MOMENTUM = 0.9
 NUM_WORKERS = 4
 RANDOM_SEED = 1234
 
-RESTORE_FROM = './pretrained_models/resnet101-5d3b4d8f.pth' # ImageNet pretrained encoder 
+RESTORE_FROM = '/mnt/lustre/lichuchen/lily/few-shot/semisup-semseg/pretrained_models/resnet101-5d3b4d8f.pth' # ImageNet pretrained encoder
 
-SPLIT_ID = './splits/voc/split_0.pkl'
-LABELED_RATIO= None # use 100% labeled data 
+#SPLIT_ID = '/mnt/lustre/lichuchen/lily/few-shot/semisup-semseg/checkpoints/sunny_semi_0_0625/train_voc_split.pkl'
+SPLIT_ID = None
+LABELED_RATIO= None # use 100% labeled data
 
 def get_arguments():
     """Parse all the arguments provided from the CLI.
@@ -143,7 +145,7 @@ def main():
 
     # load pretrained parameters
     saved_state_dict = torch.load(args.restore_from)
-    
+
     # only copy the params that exist in current model (caffe-like)
     new_params = model.state_dict().copy()
     for name, param in new_params.items():
@@ -159,8 +161,11 @@ def main():
     if not os.path.exists(args.checkpoint_dir):
         os.makedirs(args.checkpoint_dir)
 
-    if args.dataset == 'pascal_voc':    
+    if args.dataset == 'pascal_voc':
         train_dataset = VOCDataSet(args.data_dir, args.data_list, crop_size=input_size,
+                        scale=args.random_scale, mirror=args.random_mirror, mean=IMG_MEAN)
+    elif args.dataset == 'CMR':
+        train_dataset = CMRDataSet(args.data_dir, args.data_list, crop_size=input_size,
                         scale=args.random_scale, mirror=args.random_mirror, mean=IMG_MEAN)
     elif args.dataset == 'pascal_context':
         input_transform = transform.Compose([transform.ToTensor(),
@@ -168,20 +173,20 @@ def main():
         data_kwargs = {'transform': input_transform, 'base_size': 505, 'crop_size': 321}
         #train_dataset = get_segmentation_dataset('pcontext', split='train', mode='train', **data_kwargs)
         data_loader = get_loader('pascal_context')
-        data_path = get_data_path('pascal_context') 
+        data_path = get_data_path('pascal_context')
         train_dataset = data_loader(data_path, split='train', mode='train', **data_kwargs)
-        
+
     elif args.dataset == 'cityscapes':
         data_loader = get_loader('cityscapes')
         data_path = get_data_path('cityscapes')
         data_aug = Compose([RandomCrop_city((256, 512)), RandomHorizontallyFlip()])
-        train_dataset = data_loader( data_path, is_transform=True, augmentations=data_aug) 
-     
+        train_dataset = data_loader( data_path, is_transform=True, augmentations=data_aug)
+
     train_dataset_size = len(train_dataset)
     print ('dataset size: ', train_dataset_size)
 
     if args.labeled_ratio is None:
-        trainloader = data.DataLoader(train_dataset, shuffle=True, batch_size=args.batch_size, 
+        trainloader = data.DataLoader(train_dataset, shuffle=True, batch_size=args.batch_size,
                                         num_workers=4, pin_memory=True)
     else:
         partial_size = int(args.labeled_ratio * train_dataset_size)
@@ -192,6 +197,7 @@ def main():
         else:
             train_ids = np.arange(train_dataset_size)
             np.random.shuffle(train_ids)
+
 
         pickle.dump(train_ids, open(os.path.join(args.checkpoint_dir, 'split.pkl'), 'wb'))
 
@@ -224,10 +230,10 @@ def main():
 
         images, labels, _, _, index = batch_lab
         images = Variable(images).cuda(args.gpu)
-        
+
         pred = interp(model(images))
         loss = loss_calc(pred, labels, args.gpu)
-        
+
         loss.backward()
         loss_value += loss.item()
 

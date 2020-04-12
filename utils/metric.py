@@ -1,7 +1,7 @@
 import os, sys
 import numpy as np
 
-from multiprocessing import Pool 
+from multiprocessing import Pool
 #import copy_reg
 import pickle
 import types
@@ -90,6 +90,14 @@ class ConfusionMatrix(object):
                 jaccard_perclass.append(self.M[i, i] / (np.sum(self.M[i, :]) + np.sum(self.M[:, i]) - self.M[i, i]))
 
         return np.sum(jaccard_perclass)/len(jaccard_perclass), jaccard_perclass, self.M
+    def dice(self):
+        dice = 0.0
+        dice_perclass = []
+        for i in range(self.nclass):
+            if not self.M[i, i] == 0:
+                dice_perclass.append(2*self.M[i, i] / (np.sum(self.M[i, :]) + np.sum(self.M[:, i])))
+
+        return np.sum(dice_perclass)/len(dice_perclass), dice_perclass, self.M
 
     def generateM(self, item):
         gt, pred = item
@@ -119,11 +127,11 @@ if __name__ == '__main__':
 
     ConfM = ConfusionMatrix(args.class_num)
     f = ConfM.generateM
-    pool = Pool() 
+    pool = Pool()
     m_list = pool.map(f, data_list)
-    pool.close() 
-    pool.join() 
-    
+    pool.close()
+    pool.join()
+
     for m in m_list:
         ConfM.addM(m)
 

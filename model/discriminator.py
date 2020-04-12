@@ -14,6 +14,12 @@ class s4GAN_discriminator(nn.Module):
             self.avgpool = nn.AvgPool2d((20, 20))
         elif dataset == 'cityscapes':
             self.avgpool = nn.AvgPool2d((16, 32))
+        elif dataset == 'ISIC':
+            self.avgpool = nn.AvgPool2d((50, 50))
+        elif dataset == 'CMR':
+            self.avgpool = nn.AvgPool2d((8, 8))
+        elif dataset == 'RV':
+            self.avgpool = nn.AvgPool2d((13, 13))
         self.fc = nn.Linear(ndf*8, 1)
         self.leaky_relu = nn.LeakyReLU(negative_slope=0.2, inplace=True)
         self.drop = nn.Dropout2d(0.5)
@@ -21,25 +27,25 @@ class s4GAN_discriminator(nn.Module):
 
 
     def forward(self, x):
-       
+
         x = self.conv1(x)
         x = self.leaky_relu(x)
         x = self.drop(x)
-       
+
         x = self.conv2(x)
         x = self.leaky_relu(x)
         x = self.drop(x)
-        
+
         x = self.conv3(x)
         x = self.leaky_relu(x)
         x = self.drop(x)
-        
+
         x = self.conv4(x)
         x = self.leaky_relu(x)
-        
+
         maps = self.avgpool(x)
-        conv4_maps = maps 
+        conv4_maps = maps
         out = maps.view(maps.size(0), -1)
         out = self.sigmoid(self.fc(out))
-        
+
         return out, conv4_maps

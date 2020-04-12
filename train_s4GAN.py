@@ -19,35 +19,37 @@ from torch.autograd import Variable
 import torchvision.transforms as transform
 
 from model.deeplabv2 import Res_Deeplab
-#from model.deeplabv3p import Res_Deeplab 
+#from model.deeplabv3p import Res_Deeplab
 
 from model.discriminator import s4GAN_discriminator
 from utils.loss import CrossEntropy2d
 from data.voc_dataset import VOCDataSet, VOCGTDataSet
+from data.isic_dataset import ISICDataSet,ISICGTDataSet
+from data.cmr_dataset import CMRDataSet,CMRGTDataSet
 from data import get_loader, get_data_path
 from data.augmentations import *
 
 start = timeit.default_timer()
 
-DATA_DIRECTORY = './data/voc_dataset/'
-DATA_LIST_PATH = './data/voc_list/train_aug.txt'
-CHECKPOINT_DIR = './checkpoints/voc_semi_0_125/'
+DATA_DIRECTORY = '/mnt/lustre/lichuchen/lily/few-shot/semisup-semseg/data/voc_dataset/'
+DATA_LIST_PATH = '/mnt/lustre/lichuchen/lily/few-shot/semisup-semseg/data/voc_list/train_aug.txt'
+CHECKPOINT_DIR = '/mnt/lustre/lichuchen/lily/few-shot/semisup-semseg/checkpoints/voc_semi_0_125/'
 
 IMG_MEAN = np.array((104.00698793,116.66876762,122.67891434), dtype=np.float32)
-NUM_CLASSES = 21 # 21 for PASCAL-VOC / 60 for PASCAL-Context / 19 Cityscapes 
-DATASET = 'pascal_voc' #pascal_voc or pascal_context 
+NUM_CLASSES = 21 # 21 for PASCAL-VOC / 60 for PASCAL-Context / 19 Cityscapes
+DATASET = 'pascal_voc' #pascal_voc or pascal_context
 
-SPLIT_ID = './splits/voc/split_0.pkl'
+SPLIT_ID = '/mnt/lustre/lichuchen/lily/few-shot/semisup-semseg/splits/voc/split_0.pkl'
 
 MODEL = 'DeepLab'
-BATCH_SIZE = 4
+BATCH_SIZE = 1
 NUM_STEPS = 40000
 SAVE_PRED_EVERY = 5000
 
 INPUT_SIZE = '321,321'
 IGNORE_LABEL = 255 # 255 for PASCAL-VOC / -1 for PASCAL-Context / 250 for Cityscapes
 
-RESTORE_FROM = './pretrained_models/resnet101-5d3b4d8f.pth'
+RESTORE_FROM = '/mnt/lustre/lichuchen/lily/few-shot/semisup-semseg/pretrained_models/resnet101-5d3b4d8f.pth'
 
 LEARNING_RATE = 2.5e-4
 LEARNING_RATE_D = 1e-4
@@ -84,7 +86,7 @@ def get_arguments():
                         help="Path to the file listing the images in the dataset.")
     parser.add_argument("--labeled-ratio", type=float, default=LABELED_RATIO,
                         help="ratio of the labeled data to full dataset")
-    parser.add_argument("--split-id", type=str, default=SPLIT_ID,
+    parser.add_argument("--split-id", type=str, default=None,
                         help="split order id")
     parser.add_argument("--input-size", type=str, default=INPUT_SIZE,
                         help="Comma-separated string with height and width of images.")
@@ -110,6 +112,8 @@ def get_arguments():
                         help="Decay parameter to compute the learning rate.")
     parser.add_argument("--random-mirror", action="store_true",
                         help="Whether to randomly mirror the inputs during the training.")
+    parser.add_argument("--use_all", action="store_true",
+                        help="Whether to randomly mirror the inputs during the training.")
     parser.add_argument("--random-scale", action="store_true",
                         help="Whether to randomly scale the inputs during the training.")
     parser.add_argument("--random-seed", type=int, default=RANDOM_SEED,
@@ -129,6 +133,7 @@ def get_arguments():
     return parser.parse_args()
 
 args = get_arguments()
+
 
 def loss_calc(pred, label, gpu):
     label = Variable(label.long()).cuda(gpu)
@@ -164,26 +169,44 @@ def compute_argmax_map(output):
     output = np.asarray(np.argmax(output, axis=2), dtype=np.int)
     output = torch.from_numpy(output).float()
     return output
-     
-def find_good_maps(D_outs, pred_all):
+
+def find_good_maps(D_outs, pred_all,thred):
     count = 0
     for i in range(D_outs.size(0)):
-        if D_outs[i] > args.threshold_st:
+        print('indicator',D_outs[i],'thred',thred)
+        if D_outs[i] > thred:
             count +=1
+        # if D_outs[i] <thred:
+        #     sco = str(D_outs.detach().cpu().numpy()[0][0])
+        #     name_d = batch_remain[-2][0]
+        #     pseudo_label = labels_sel[0].cpu().numpy()
+        #     cv2.imwrite(os.path.join(args.checkpoint_dir,name_d+'_'+sco+'.png'),pseudo_label*60)
 
     if count > 0:
         print ('Above ST-Threshold : ', count, '/', args.batch_size)
         pred_sel = torch.Tensor(count, pred_all.size(1), pred_all.size(2), pred_all.size(3))
         label_sel = torch.Tensor(count, pred_sel.size(2), pred_sel.size(3))
-        num_sel = 0 
+        num_sel = 0
         for j in range(D_outs.size(0)):
-            if D_outs[j] > args.threshold_st:
+            if D_outs[j] > thred:
                 pred_sel[num_sel] = pred_all[j]
                 label_sel[num_sel] = compute_argmax_map(pred_all[j])
                 num_sel +=1
-        return  pred_sel.cuda(), label_sel.cuda(), count  
+        return  pred_sel.cuda(), label_sel.cuda(), count
     else:
-        return 0, 0, count 
+        return 0, 0, count
+
+def use_all_maps(D_outs, pred_all):
+    count = pred_all.size(0)
+    pred_sel = torch.Tensor(count, pred_all.size(1), pred_all.size(2), pred_all.size(3))
+    label_sel = torch.Tensor(count, pred_sel.size(2), pred_sel.size(3))
+    num_sel = 0
+    for j in range(pred_all.size(0)):
+        pred_sel[num_sel] = pred_all[j]
+        label_sel[num_sel] = compute_argmax_map(pred_all[j])
+        num_sel +=1
+    cnt = pred_all.size(0)
+    return  pred_sel.cuda(), label_sel.cuda(),cnt
 
 criterion = nn.BCELoss()
 
@@ -198,16 +221,16 @@ def main():
 
     # create network
     model = Res_Deeplab(num_classes=args.num_classes)
-    
+
     # load pretrained parameters
     saved_state_dict = torch.load(args.restore_from)
-    
+
     new_params = model.state_dict().copy()
     for name, param in new_params.items():
         if name in saved_state_dict and param.size() == saved_state_dict[name].size():
             new_params[name].copy_(saved_state_dict[name])
     model.load_state_dict(new_params)
-    
+
     model.train()
     model.cuda(args.gpu)
 
@@ -224,11 +247,22 @@ def main():
     if not os.path.exists(args.checkpoint_dir):
         os.makedirs(args.checkpoint_dir)
 
-    if args.dataset == 'pascal_voc':    
+    if args.dataset == 'pascal_voc':
         train_dataset = VOCDataSet(args.data_dir, args.data_list, crop_size=input_size,
                         scale=args.random_scale, mirror=args.random_mirror, mean=IMG_MEAN)
         #train_gt_dataset = VOCGTDataSet(args.data_dir, args.data_list, crop_size=input_size,
                         #scale=args.random_scale, mirror=args.random_mirror, mean=IMG_MEAN)
+                        #
+    elif args.dataset == 'ISIC':
+        train_dataset = ISICDataSet(args.data_dir, args.data_list, crop_size=input_size,
+                        scale=args.random_scale, mirror=args.random_mirror, mean=IMG_MEAN)
+    elif args.dataset == 'CMR':
+        train_dataset = CMRDataSet(args.data_dir, args.data_list, crop_size=input_size,
+                        scale=args.random_scale, mirror=args.random_mirror, mean=IMG_MEAN)
+    elif args.dataset == 'RV':
+        train_dataset = CMRDataSet(args.data_dir, args.data_list, crop_size=input_size,
+                        scale=args.random_scale, mirror=args.random_mirror, mean=IMG_MEAN)
+
 
     elif args.dataset == 'pascal_context':
         input_transform = transform.Compose([transform.ToTensor(),
@@ -236,16 +270,16 @@ def main():
         data_kwargs = {'transform': input_transform, 'base_size': 505, 'crop_size': 321}
         #train_dataset = get_segmentation_dataset('pcontext', split='train', mode='train', **data_kwargs)
         data_loader = get_loader('pascal_context')
-        data_path = get_data_path('pascal_context') 
+        data_path = get_data_path('pascal_context')
         train_dataset = data_loader(data_path, split='train', mode='train', **data_kwargs)
         #train_gt_dataset = data_loader(data_path, split='train', mode='train', **data_kwargs)
-        
+
     elif args.dataset == 'cityscapes':
         data_loader = get_loader('cityscapes')
         data_path = get_data_path('cityscapes')
         data_aug = Compose([RandomCrop_city((256, 512)), RandomHorizontallyFlip()])
-        train_dataset = data_loader( data_path, is_transform=True, augmentations=data_aug) 
-        #train_gt_dataset = data_loader( data_path, is_transform=True, augmentations=data_aug) 
+        train_dataset = data_loader( data_path, is_transform=True, augmentations=data_aug)
+        #train_gt_dataset = data_loader( data_path, is_transform=True, augmentations=data_aug)
 
     train_dataset_size = len(train_dataset)
     print ('dataset size: ', train_dataset_size)
@@ -256,26 +290,29 @@ def main():
 
         trainloader_gt = data.DataLoader(train_dataset,
                         batch_size=args.batch_size, shuffle=True, num_workers=4, pin_memory=True)
-        
+
         trainloader_remain = data.DataLoader(train_dataset,
                         batch_size=args.batch_size, shuffle=True, num_workers=4, pin_memory=True)
         trainloader_remain_iter = iter(trainloader_remain)
 
     else:
         partial_size = int(args.labeled_ratio * train_dataset_size)
-        
+
         if args.split_id is not None:
             train_ids = pickle.load(open(args.split_id, 'rb'))
             print('loading train ids from {}'.format(args.split_id))
         else:
             train_ids = np.arange(train_dataset_size)
             np.random.shuffle(train_ids)
-        
+
         pickle.dump(train_ids, open(os.path.join(args.checkpoint_dir, 'train_voc_split.pkl'), 'wb'))
-        
+
         train_sampler = data.sampler.SubsetRandomSampler(train_ids[:partial_size])
         train_remain_sampler = data.sampler.SubsetRandomSampler(train_ids[partial_size:])
         train_gt_sampler = data.sampler.SubsetRandomSampler(train_ids[:partial_size])
+
+
+
 
         trainloader = data.DataLoader(train_dataset,
                         batch_size=args.batch_size, sampler=train_sampler, num_workers=4, pin_memory=True)
@@ -285,6 +322,8 @@ def main():
                         batch_size=args.batch_size, sampler=train_gt_sampler, num_workers=4, pin_memory=True)
 
         trainloader_remain_iter = iter(trainloader_remain)
+        print(len(trainloader))
+        print(len(trainloader_remain))
 
     trainloader_iter = iter(trainloader)
     trainloader_gt_iter = iter(trainloader_gt)
@@ -308,6 +347,7 @@ def main():
 
 
     for i_iter in range(args.num_steps):
+        thred = 0.6
 
         loss_ce_value = 0
         loss_D_value = 0
@@ -319,7 +359,7 @@ def main():
         optimizer_D.zero_grad()
         adjust_learning_rate_D(optimizer_D, i_iter)
 
-        # train Segmentation Network 
+        # train Segmentation Network
         # don't accumulate grads in D
         for param in model_D.parameters():
             param.requires_grad = False
@@ -335,27 +375,37 @@ def main():
         images = Variable(images).cuda(args.gpu)
         pred = interp(model(images))
         loss_ce = loss_calc(pred, labels, args.gpu) # Cross entropy loss for labeled data
-        
+
         #training loss for remaining unlabeled data
         try:
             batch_remain = next(trainloader_remain_iter)
         except:
             trainloader_remain_iter = iter(trainloader_remain)
             batch_remain = next(trainloader_remain_iter)
-        
+
         images_remain, _, _, _, _ = batch_remain
         images_remain = Variable(images_remain).cuda(args.gpu)
         pred_remain = interp(model(images_remain))
-        
+
         # concatenate the prediction with the input images
         images_remain = (images_remain-torch.min(images_remain))/(torch.max(images_remain)- torch.min(images_remain))
         #print (pred_remain.size(), images_remain.size())
         pred_cat = torch.cat((F.softmax(pred_remain, dim=1), images_remain), dim=1)
-          
-        D_out_z, D_out_y_pred = model_D(pred_cat) # predicts the D ouput 0-1 and feature map for FM-loss 
-  
-        # find predicted segmentation maps above threshold 
-        pred_sel, labels_sel, count = find_good_maps(D_out_z, pred_remain) 
+
+        D_out_z, D_out_y_pred = model_D(pred_cat) # predicts the D ouput 0-1 and feature map for FM-loss
+
+        # find predicted segmentation maps above threshold
+        if args.use_all:
+            pred_sel, labels_sel, count = use_all_maps(D_out_z, pred_remain)
+        else:
+            pred_sel, labels_sel, count = find_good_maps(D_out_z, pred_remain,thred)
+        # if count>0:
+        #     sco = str(D_out_z.detach().cpu().numpy()[0][0])
+        #     name_d = batch_remain[-2][0]
+        #     pseudo_label = labels_sel[0].cpu().numpy()
+        #     cv2.imwrite(os.path.join(args.checkpoint_dir,name_d+'_'+sco+'.png'),pseudo_label*60)
+
+
 
         # training loss on above threshold segmentation predictions (Cross Entropy Loss)
         if count > 0 and i_iter > 0:
@@ -371,25 +421,41 @@ def main():
             batch_gt = next(trainloader_gt_iter)
 
         images_gt, labels_gt, _, _, _ = batch_gt
-        # Converts grounth truth segmentation into 'num_classes' segmentation maps. 
+        # Converts grounth truth segmentation into 'num_classes' segmentation maps.
         D_gt_v = Variable(one_hot(labels_gt)).cuda(args.gpu)
-                
+
         images_gt = images_gt.cuda()
         images_gt = (images_gt - torch.min(images_gt))/(torch.max(images)-torch.min(images))
-            
+
         D_gt_v_cat = torch.cat((D_gt_v, images_gt), dim=1)
         D_out_z_gt , D_out_y_gt = model_D(D_gt_v_cat)
-        
+        ####lichuchen####
+        # images_gt = Variable(images_gt).cuda(args.gpu)
+        # pred_fm = interp(model(images_gt))
+        # fm_cat = torch.cat((F.softmax(pred_fm, dim=1), images_gt), dim=1)
+        # _, D_out_fm_pred = model_D(fm_cat)
+        ####lichuchen####
+
         # L1 loss for Feature Matching Loss
         loss_fm = torch.mean(torch.abs(torch.mean(D_out_y_gt, 0) - torch.mean(D_out_y_pred, 0)))
-    
+        # loss_mse = torch.nn.MSELoss()
+        # loss_fm = loss_mse(torch.mean(D_out_y_gt, 0),torch.mean(D_out_y_pred, 0))
+
+
+        ####lcc####
         if count > 0 and i_iter > 0: # if any good predictions found for self-training loss
-            loss_S = loss_ce +  args.lambda_fm*loss_fm + args.lambda_st*loss_st 
+            loss_S = loss_ce +  args.lambda_fm*loss_fm + args.lambda_st*loss_st
         else:
             loss_S = loss_ce + args.lambda_fm*loss_fm
+        # if count > 0 and i_iter > 0: # if any good predictions found for self-training loss
+        #     loss_S = loss_ce  + args.lambda_st*loss_st
+        # else:
+        #     loss_S = loss_ce
+
+        ####lcc####
 
         loss_S.backward()
-        loss_fm_value+= args.lambda_fm*loss_fm
+        # loss_fm_value+= args.lambda_fm*loss_fm
 
         loss_ce_value += loss_ce.item()
         loss_S_value += loss_S.item()
@@ -400,16 +466,16 @@ def main():
 
         # train with pred
         pred_cat = pred_cat.detach()  # detach does not allow the graddients to back propagate.
-        
+
         D_out_z, _ = model_D(pred_cat)
         y_fake_ = Variable(torch.zeros(D_out_z.size(0), 1).cuda())
-        loss_D_fake = criterion(D_out_z, y_fake_) 
+        loss_D_fake = criterion(D_out_z, y_fake_)
 
         # train with gt
         D_out_z_gt , _ = model_D(D_gt_v_cat)
-        y_real_ = Variable(torch.ones(D_out_z_gt.size(0), 1).cuda()) 
+        y_real_ = Variable(torch.ones(D_out_z_gt.size(0), 1).cuda())
         loss_D_real = criterion(D_out_z_gt, y_real_)
-        
+
         loss_D = (loss_D_fake + loss_D_real)/2.0
         loss_D.backward()
         loss_D_value += loss_D.item()
@@ -422,13 +488,13 @@ def main():
         if i_iter >= args.num_steps-1:
             print ('save model ...')
             torch.save(model.state_dict(),os.path.join(args.checkpoint_dir, 'VOC_'+str(args.num_steps)+'.pth'))
-            torch.save(model_D.state_dict(),os.path.join(args.checkpoint_dir, 'VOC_'+str(args.num_steps)+'_D.pth'))
+            # torch.save(model_D.state_dict(),os.path.join(args.checkpoint_dir, 'VOC_'+str(args.num_steps)+'_D.pth'))
             break
 
         if i_iter % args.save_pred_every == 0 and i_iter!=0:
             print ('saving checkpoint  ...')
             torch.save(model.state_dict(),os.path.join(args.checkpoint_dir, 'VOC_'+str(i_iter)+'.pth'))
-            torch.save(model_D.state_dict(),os.path.join(args.checkpoint_dir, 'VOC_'+str(i_iter)+'_D.pth'))
+            # torch.save(model_D.state_dict(),os.path.join(args.checkpoint_dir, 'VOC_'+str(i_iter)+'_D.pth'))
 
     end = timeit.default_timer()
     print (end-start,'seconds')

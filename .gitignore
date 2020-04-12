@@ -3,6 +3,12 @@ data/city_dataset/*
 data/pcontext_dataset/*
 checkpoints/*
 pretrained_models/*
+log/*
+data/cmr/*
+data/ISIC/*
+data/mv/*
+scrip_ISIC/*
+
 
 *__pycache__*
 */__pycache__
@@ -17,4 +23,8 @@ load_*
 results/*
 
 *.sh
+*.png
+*.tar.gz
+*.tar
+*.zip
 myprog*
