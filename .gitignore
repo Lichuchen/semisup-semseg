@@ -22,7 +22,6 @@ evaluate_*
 load_*
 results/*
 
-*.sh
 *.png
 *.tar.gz
 *.tar

@@ -1,0 +1,3 @@
+class  0 background   IU 0.87
+class  1 right_ventricle IU 0.24
+meanIOU: 0.5550955224077672
