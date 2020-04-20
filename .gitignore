@@ -1,7 +1,6 @@
 data/voc_dataset/*
 data/city_dataset/*
 data/pcontext_dataset/*
-checkpoints/*
 pretrained_models/*
 log/*
 data/cmr/*
@@ -16,7 +15,6 @@ scrip_ISIC/*
 train_pascal*
 train_city*
 train_pc*
-train_voc*
 
 evaluate_*
 load_*
@@ -30,5 +28,4 @@ results/*
 *.jpg
 *.pth
 *.log
-*.pkl
 myprog*
